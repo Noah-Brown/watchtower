@@ -14,7 +14,7 @@ const STATUS_UI = {
   errored: ["blk", "ERRORED"],
 };
 
-function Hud({ sessions, needYou, spend, wsLive, apiDown }) {
+function Hud({ sessions, needYou, spend, projects, wsLive, apiDown }) {
   const [now, setNow] = useState(null);
   useEffect(() => {
     setNow(new Date());
@@ -49,10 +49,23 @@ function Hud({ sessions, needYou, spend, wsLive, apiDown }) {
         <span className="val">{tokens(tin)} in · {tokens(tout)} out</span></div>
       <div className="res"><span className="lbl">Spend</span>
         <span className="val">{money(today)} today · {money(week)} wk</span></div>
+      {(() => {
+        const cap = projects.reduce((a, p) => a + Number(p.budget_usd_daily || 0), 0);
+        if (!cap) return null;
+        const frac = today / cap;
+        return (
+          <div className="res"><span className="lbl">Daily cap</span>
+            <span className={"val" + (frac >= 0.8 ? " alert" : "")}>{money(today)} / {money(cap)}</span>
+            <div className="bar"><i className={frac >= 0.8 ? "hot" : ""}
+              style={{ width: `${Math.min(100, frac * 100)}%` }} /></div>
+          </div>
+        );
+      })()}
       {unpriced > 0 && (
         <div className="res"><span className="lbl">⚠ unpriced</span>
           <span className="val alert">{unpriced} usage rows</span></div>
       )}
+      <a className="gear" href="/settings" title="pricing + budgets">⚙</a>
       <div className="keys"><kbd>1–6</kbd><kbd>a</kbd><kbd>u</kbd><kbd>i</kbd><kbd>/</kbd></div>
       <div className="clock">
         {clock} · {apiDown
@@ -70,7 +83,8 @@ function Minimap({ projects, unassigned, sessions }) {
       <div className="terr">
         {projects.map((p) => {
           const active = Number(p.agents_running) + Number(p.agents_blocked);
-          const cls = Number(p.open_decisions) > 0 || Number(p.agents_blocked) > 0
+          const cls = p.over_budget ? "bad"
+            : Number(p.open_decisions) > 0 || Number(p.agents_blocked) > 0
             ? "warn" : active > 0 ? "ok" : "idle";
           const bits = [];
           if (active || p.agents_stale) {
@@ -79,9 +93,12 @@ function Minimap({ projects, unassigned, sessions }) {
             for (let i = 0; i < p.agents_stale; i++) bits.push(<b key={"s" + i} className="stl" />);
           }
           const meta = [
+            p.over_budget ? "OVER BUDGET" : null,
             active ? `${active} agent${active > 1 ? "s" : ""}` : "idle",
             Number(p.open_decisions) ? `${p.open_decisions} decision${p.open_decisions > 1 ? "s" : ""}` : null,
-            Number(p.spend_today) ? money(p.spend_today) : null,
+            Number(p.spend_today)
+              ? money(p.spend_today) + (p.budget_usd_daily ? ` / ${money(p.budget_usd_daily)}` : "")
+              : null,
           ].filter(Boolean).join(" · ");
           return (
             <div key={p.slug} className={`tile ${cls}`} title={p.objective || p.name}>
@@ -347,7 +364,7 @@ export default function Tower() {
   const needYou = t.decisions.length + t.deployments.length;
   return (
     <div className="shell">
-      <Hud sessions={t.sessions} needYou={needYou} spend={t.spend} wsLive={t.wsLive} apiDown={t.apiDown} />
+      <Hud sessions={t.sessions} needYou={needYou} spend={t.spend} projects={t.projects} wsLive={t.wsLive} apiDown={t.apiDown} />
       <Minimap projects={t.projects} unassigned={t.unassigned} sessions={t.sessions} />
       <Units sessions={t.sessions} onOpen={setOpen} />
       <Alerts decisions={t.decisions} deployments={t.deployments} refetch={t.refetch} />

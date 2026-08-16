@@ -15,7 +15,8 @@ from .config import EVENTS_CHANNEL, HEARTBEAT_TIMEOUT_S, REDIS_URL, STALE_SWEEP_
 from .db import engine, get_db
 from .redaction import redact_text
 from .schemas import (
-    DecisionAnswer, DecisionCreate, DeploymentCreate, DeploymentVerdict, EventEnvelope,
+    DecisionAnswer, DecisionCreate, DeploymentCreate, DeploymentVerdict,
+    EventEnvelope, PricingUpdate, ProjectPatch,
 )
 
 publisher = redis_sync.Redis.from_url(REDIS_URL)
@@ -27,11 +28,17 @@ async def _stale_sweeper():
         try:
             with Session(engine) as db:
                 n = ev.sweep_stale(db, HEARTBEAT_TIMEOUT_S)
+                flipped = ev.sweep_budgets(db)
                 db.commit()
             if n:
                 publisher.publish(
                     EVENTS_CHANNEL,
                     json.dumps({"type": "sessions.stale", "count": n}),
+                )
+            for slug in flipped:
+                publisher.publish(
+                    EVENTS_CHANNEL,
+                    json.dumps({"type": "budget.flip", "project_slug": slug}),
                 )
         except Exception:
             pass  # sweeper must never die; next tick retries
@@ -290,7 +297,7 @@ def list_projects(db: Session = Depends(get_db)):
     rows = db.execute(
         text(
             "SELECT p.slug, p.name, p.objective, p.phase, p.color,"
-            " p.budget_usd_daily, p.budget_usd_monthly,"
+            " p.budget_usd_daily, p.budget_usd_monthly, p.over_budget,"
             " COUNT(s.id) FILTER (WHERE s.status IN ('running')) AS agents_running,"
             " COUNT(s.id) FILTER (WHERE s.status = 'blocked') AS agents_blocked,"
             " COUNT(s.id) FILTER (WHERE s.status = 'stale') AS agents_stale,"
@@ -308,6 +315,57 @@ def list_projects(db: Session = Depends(get_db)):
         )
     ).scalar()
     return {"projects": [dict(r) for r in rows], "unassigned_sessions": unassigned}
+
+
+@app.get("/v1/projects/{slug}/budget")
+def project_budget(slug: str, db: Session = Depends(get_db)):
+    """The circuit-breaker check. Adapters call this before starting a session;
+    over_budget=true means do not start (docs/decisions.md #4)."""
+    status = ev.budget_status(db, slug)
+    if status is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    return status
+
+
+@app.patch("/v1/projects/{slug}")
+def patch_project(slug: str, body: ProjectPatch, db: Session = Depends(get_db)):
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not fields:
+        return {"ok": True}
+    sets = ", ".join(f"{k} = :{k}" for k in fields)
+    result = db.execute(
+        text(f"UPDATE project SET {sets} WHERE slug = :slug RETURNING slug"),
+        {**fields, "slug": slug},
+    ).first()
+    if not result:
+        raise HTTPException(status_code=404, detail="project not found")
+    flipped = ev.sweep_budgets(db)
+    db.commit()
+    for s in flipped:
+        publisher.publish(EVENTS_CHANNEL, json.dumps({"type": "budget.flip", "project_slug": s}))
+    publisher.publish(EVENTS_CHANNEL, json.dumps({"type": "project.updated", "project_slug": slug}))
+    return {"ok": True}
+
+
+@app.get("/v1/pricing")
+def get_pricing(db: Session = Depends(get_db)):
+    rows = db.execute(
+        text("SELECT slug, display_name, pricing_json FROM harness ORDER BY slug")
+    ).mappings()
+    return {"harnesses": [dict(r) for r in rows]}
+
+
+@app.put("/v1/pricing/{harness_slug}")
+def put_pricing(harness_slug: str, body: PricingUpdate, db: Session = Depends(get_db)):
+    result = db.execute(
+        text("UPDATE harness SET pricing_json = :p WHERE slug = :s RETURNING slug"),
+        {"p": json.dumps(body.pricing_json), "s": harness_slug},
+    ).first()
+    if not result:
+        raise HTTPException(status_code=404, detail="harness not found")
+    db.commit()
+    publisher.publish(EVENTS_CHANNEL, json.dumps({"type": "pricing.updated", "harness": harness_slug}))
+    return {"ok": True}
 
 
 @app.get("/v1/apps")

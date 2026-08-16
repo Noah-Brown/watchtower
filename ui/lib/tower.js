@@ -100,6 +100,36 @@ export async function fetchSessionDetail(id) {
   return res.json();
 }
 
+export async function getPricing() {
+  const res = await fetch(`${API}/v1/pricing`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`pricing: ${res.status}`);
+  return res.json();
+}
+
+export async function putPricing(harness, pricing_json) {
+  const res = await fetch(`${API}/v1/pricing/${harness}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pricing_json }),
+  });
+  if (!res.ok) throw new Error(`pricing save: ${res.status}`);
+}
+
+export async function getProjects() {
+  const res = await fetch(`${API}/v1/projects`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`projects: ${res.status}`);
+  return res.json();
+}
+
+export async function patchProject(slug, patch) {
+  const res = await fetch(`${API}/v1/projects/${slug}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`project save: ${res.status}`);
+}
+
 export const HARNESS_BADGE = {
   "claude-code": ["h-cc", "claude code"],
   codex: ["h-cx", "codex"],

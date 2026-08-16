@@ -14,7 +14,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "common"))
-from tower_client import envelope, send  # noqa: E402
+from tower_client import envelope, fetch_budget, send  # noqa: E402
 
 SEQ_DIR = os.path.expanduser("~/.tower/seq")
 
@@ -77,6 +77,37 @@ def main():
     if etype == "session.start":
         event["payload"]["cwd"] = hook.get("cwd")  # cwd is a path, exempt from free-text redaction
     send([event])
+
+    # Circuit breaker (docs/decisions.md #4): on session start, if the project
+    # is over budget, inject a hard notice into the session's context. Needs
+    # TOWER_PROJECT set (the hook can't run the server-side cwd inference).
+    project = os.environ.get("TOWER_PROJECT")
+    if etype == "session.start" and project:
+        budget = fetch_budget(project)
+        if budget and budget.get("over_budget"):
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": (
+                        f"TOWER CIRCUIT BREAKER: project '{project}' is OVER BUDGET "
+                        f"(${budget['spend_today']:.2f} today"
+                        + (f" / ${budget['budget_usd_daily']:.2f} daily cap" if budget.get("budget_usd_daily") else "")
+                        + "). Do not start new work. Summarize state and stop; "
+                        "Noah must raise the budget in the Tower to continue."
+                    ),
+                }
+            }))
+        elif budget and budget.get("warn"):
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": (
+                        f"Tower budget warning: project '{project}' is at "
+                        f"{budget['fraction']:.0%} of its budget. Prefer finishing "
+                        "in-flight work over starting new threads."
+                    ),
+                }
+            }))
 
 
 if __name__ == "__main__":

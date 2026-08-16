@@ -245,6 +245,54 @@ def create_deployment(db: Session, *, app_slug: str, env: str, ref: str, summary
     return deployment_id
 
 
+def budget_status(db: Session, slug: str) -> dict | None:
+    """Spend vs budgets for one project. warn at >=80%, over at >=100%
+    (docs/decisions.md #4)."""
+    row = db.execute(
+        text(
+            "SELECT p.slug, p.budget_usd_daily, p.budget_usd_monthly, p.over_budget,"
+            " (SELECT COALESCE(SUM(cost_usd),0) FROM usage_ledger u WHERE u.project_slug = p.slug"
+            "   AND u.ts >= date_trunc('day', now())) AS spend_today,"
+            " (SELECT COALESCE(SUM(cost_usd),0) FROM usage_ledger u WHERE u.project_slug = p.slug"
+            "   AND u.ts >= date_trunc('month', now())) AS spend_month"
+            " FROM project p WHERE p.slug = :slug"
+        ),
+        {"slug": slug},
+    ).mappings().first()
+    if not row:
+        return None
+    frac = 0.0
+    for spend, budget in ((row["spend_today"], row["budget_usd_daily"]),
+                          (row["spend_month"], row["budget_usd_monthly"])):
+        if budget and float(budget) > 0:
+            frac = max(frac, float(spend) / float(budget))
+    return {
+        "project_slug": row["slug"],
+        "spend_today": float(row["spend_today"]),
+        "budget_usd_daily": float(row["budget_usd_daily"]) if row["budget_usd_daily"] else None,
+        "spend_month": float(row["spend_month"]),
+        "budget_usd_monthly": float(row["budget_usd_monthly"]) if row["budget_usd_monthly"] else None,
+        "fraction": round(frac, 4),
+        "warn": frac >= 0.8,
+        "over_budget": frac >= 1.0,
+    }
+
+
+def sweep_budgets(db: Session) -> list[str]:
+    """Recompute over_budget for all projects. Returns slugs whose flag flipped."""
+    flipped = []
+    slugs = [r.slug for r in db.execute(text("SELECT slug FROM project"))]
+    for slug in slugs:
+        status = budget_status(db, slug)
+        result = db.execute(
+            text("UPDATE project SET over_budget = :o WHERE slug = :s AND over_budget != :o"),
+            {"o": status["over_budget"], "s": slug},
+        )
+        if result.rowcount:
+            flipped.append(slug)
+    return flipped
+
+
 def sweep_stale(db: Session, timeout_s: int) -> int:
     result = db.execute(
         text(

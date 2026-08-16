@@ -25,6 +25,11 @@ h2{font-size:11px;color:var(--ink2);padding:10px 12px 6px}
 .res .lbl{color:var(--ink3);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
 .res .val{font-weight:500}
 .res .val.alert{color:var(--alert)}
+.bar{width:120px;height:8px;background:var(--line);border:1px solid var(--line2);position:relative}
+.bar i{position:absolute;left:0;top:0;bottom:0;background:var(--unit)}
+.bar i.hot{background:var(--warn)}
+.gear{color:var(--ink3);text-decoration:none;font-size:14px}
+.gear:hover{color:var(--unit)}
 .hud .clock{margin-left:auto;color:var(--ink3);font-family:var(--mono);font-size:11px}
 .hud .clock .live{color:var(--ok)}
 .hud .clock .dead{color:var(--bad)}
@@ -125,6 +130,25 @@ h2{font-size:11px;color:var(--ink2);padding:10px 12px 6px}
 .dr-timeline .et{color:var(--unit)}
 .dr-timeline .ep{color:var(--ink2);overflow-wrap:anywhere}
 .dim{color:var(--ink3)}
+
+/* SETTINGS */
+.settings{min-height:100vh;display:flex;flex-direction:column}
+.settings .hud{height:44px}
+.set-cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;padding:16px;align-items:start}
+@media (max-width:1000px){.set-cols{grid-template-columns:1fr}}
+.set-block{margin-bottom:20px}
+.set-table{border-collapse:collapse;width:100%;font-size:11px}
+.set-table th{text-align:left;color:var(--ink3);font-weight:400;text-transform:uppercase;font-size:9px;letter-spacing:.08em;padding:6px 8px;border-bottom:1px solid var(--line2)}
+.set-table td{padding:4px 8px;border-bottom:1px solid var(--line);color:var(--ink2)}
+.set-table tr.over td{color:var(--bad)}
+.set-table .flag{color:var(--bad);font-size:9px;letter-spacing:.08em}
+.set-table input{width:80px;background:var(--panel2);border:1px solid var(--line2);color:var(--ink);font-family:var(--mono);font-size:11px;padding:3px 6px}
+.set-table button,.set-actions button{background:transparent;border:1px solid var(--line2);color:var(--ink);font-family:var(--mono);font-size:10px;padding:3px 10px;cursor:pointer}
+.set-table button:disabled,.set-actions button:disabled{opacity:.4;cursor:default}
+.set-table button.ghost{border-style:dashed;color:var(--ink3)}
+.set-actions{display:flex;gap:8px;margin-top:8px}
+.set-actions input{background:var(--panel2);border:1px solid var(--line2);color:var(--ink);font-family:var(--mono);font-size:11px;padding:3px 8px;width:220px}
+.note{font-size:11px;padding:0 8px}
 
 /* BASE */
 .base{grid-area:base;display:flex;align-items:center;gap:0;background:var(--panel2);border-top:1px solid var(--line2);overflow-x:auto}

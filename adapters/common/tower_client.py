@@ -52,6 +52,19 @@ def envelope(harness, session_id, event_type, payload, seq, project_slug=None, h
     }
 
 
+def fetch_budget(project_slug):
+    """Circuit-breaker check. Returns the budget status dict, or None if the
+    Tower is unreachable (fail open — the Tower observes, it must not brick
+    harnesses when it's down)."""
+    try:
+        with urllib.request.urlopen(
+            f"{TOWER_URL}/v1/projects/{project_slug}/budget", timeout=3
+        ) as resp:
+            return json.loads(resp.read().decode())
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
 def send(events, retries=3):
     """POST a list of envelopes. Best-effort: adapters must never break the
     harness, so failures are swallowed after retries."""

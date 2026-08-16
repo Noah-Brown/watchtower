@@ -153,6 +153,17 @@ class DeploymentVerdict(BaseModel):
     notes: str | None = None
 
 
+class ProjectPatch(BaseModel):
+    budget_usd_daily: float | None = None
+    budget_usd_monthly: float | None = None
+    phase: str | None = None
+    objective: str | None = None
+
+
+class PricingUpdate(BaseModel):
+    pricing_json: dict[str, dict[str, float]]
+
+
 class DecisionCreate(BaseModel):
     project_slug: str | None = None
     session_id: str | None = None
