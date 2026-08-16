@@ -66,14 +66,27 @@ def cmd_ask(args):
 
 def cmd_deploy_request(args):
     body = {
+        "app_slug": args.app,
+        "env": args.env,
+        "ref": args.ref,
+        "summary": args.summary,
+        "checks": args.check or [],
+        "session_id": os.environ.get("TOWER_SESSION_ID"),
         "project_slug": args.project,
-        "kind": "deploy",
-        "title": f"Deploy {args.app} → {args.env} @ {args.ref}",
-        "context": args.summary,
-        "urgency": "high",
     }
-    decision_id = _request("POST", "/v1/decisions", body)["id"]
-    print(decision_id)
+    deployment_id = _request("POST", "/v1/deployments", body)["id"]
+    if args.no_wait:
+        print(deployment_id)
+        return
+    print(f"deployment {deployment_id} requested; waiting for sign-off…", file=sys.stderr)
+    while True:
+        deployment = _request("GET", f"/v1/deployments/{deployment_id}")
+        if deployment["status"] == "approved":
+            print(deployment_id)  # agents must not deploy without this id
+            return
+        if deployment["status"] == "rejected":
+            sys.exit(f"tower: deployment rejected — {deployment.get('notes') or 'no notes'}")
+        time.sleep(POLL_INTERVAL_S)
 
 
 def cmd_state(args):
@@ -104,6 +117,8 @@ def main():
     deploy.add_argument("--ref", required=True)
     deploy.add_argument("--project")
     deploy.add_argument("--summary")
+    deploy.add_argument("--check", action="append", help="a passed check, repeatable")
+    deploy.add_argument("--no-wait", action="store_true")
     deploy.set_defaults(func=cmd_deploy_request)
 
     state = sub.add_parser("state", help="list sessions")

@@ -14,7 +14,9 @@ from . import events as ev
 from .config import EVENTS_CHANNEL, HEARTBEAT_TIMEOUT_S, REDIS_URL, STALE_SWEEP_INTERVAL_S
 from .db import engine, get_db
 from .redaction import redact_text
-from .schemas import DecisionAnswer, DecisionCreate, EventEnvelope
+from .schemas import (
+    DecisionAnswer, DecisionCreate, DeploymentCreate, DeploymentVerdict, EventEnvelope,
+)
 
 publisher = redis_sync.Redis.from_url(REDIS_URL)
 
@@ -171,6 +173,116 @@ def answer_decision(decision_id: str, body: DecisionAnswer, db: Session = Depend
         EVENTS_CHANNEL, json.dumps({"type": "decision.answered", "decision_id": decision_id})
     )
     return {"ok": True}
+
+
+@app.get("/v1/sessions/{session_id}")
+def session_detail(session_id: str, db: Session = Depends(get_db)):
+    row = db.execute(
+        text(
+            "SELECT *,"
+            " (SELECT COALESCE(SUM(cost_usd),0) FROM usage_ledger u WHERE u.session_id = agent_session.id) AS cost_usd,"
+            " (SELECT COALESCE(SUM(input),0) FROM usage_ledger u WHERE u.session_id = agent_session.id) AS tokens_in,"
+            " (SELECT COALESCE(SUM(output),0) FROM usage_ledger u WHERE u.session_id = agent_session.id) AS tokens_out"
+            " FROM agent_session WHERE id::text = :id OR harness_session_id = :id"
+        ),
+        {"id": session_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="session not found")
+    sid = str(row["id"])
+    timeline = db.execute(
+        text(
+            "SELECT ts, seq, type, payload FROM event WHERE session_id = :sid"
+            " AND type != 'session.heartbeat' ORDER BY seq DESC LIMIT 200"
+        ),
+        {"sid": sid},
+    ).mappings()
+    artifacts = db.execute(
+        text(
+            "SELECT ts, payload FROM event WHERE session_id = :sid AND type = 'artifact'"
+            " ORDER BY seq DESC LIMIT 50"
+        ),
+        {"sid": sid},
+    ).mappings()
+    return {
+        "session": dict(row),
+        "timeline": [dict(r) for r in timeline],
+        "artifacts": [dict(r) for r in artifacts],
+    }
+
+
+@app.get("/v1/deployments")
+def list_deployments(status: str = "requested", db: Session = Depends(get_db)):
+    rows = db.execute(
+        text(
+            "SELECT d.*, a.project_slug, a.env FROM deployment d"
+            " JOIN app a ON a.slug = d.app_slug"
+            " WHERE d.status = :status ORDER BY d.requested_at"
+        ),
+        {"status": status},
+    ).mappings()
+    return {"deployments": [dict(r) for r in rows]}
+
+
+@app.post("/v1/deployments")
+def create_deployment_endpoint(body: DeploymentCreate, db: Session = Depends(get_db)):
+    session_id = None
+    if body.session_id:
+        row = db.execute(
+            text("SELECT id FROM agent_session WHERE id::text = :s OR harness_session_id = :s"),
+            {"s": body.session_id},
+        ).first()
+        session_id = str(row.id) if row else None
+    deployment_id = ev.create_deployment(
+        db,
+        app_slug=body.app_slug,
+        env=body.env,
+        ref=body.ref,
+        summary=redact_text(body.summary) if body.summary else None,
+        checks=body.checks,
+        session_id=session_id,
+        project_slug=body.project_slug,
+    )
+    db.commit()
+    publisher.publish(
+        EVENTS_CHANNEL,
+        json.dumps({"type": "deploy.requested", "deployment_id": deployment_id}),
+    )
+    return {"id": deployment_id}
+
+
+@app.get("/v1/deployments/{deployment_id}")
+def get_deployment(deployment_id: str, db: Session = Depends(get_db)):
+    row = db.execute(
+        text("SELECT * FROM deployment WHERE id::text = :id"), {"id": deployment_id}
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="deployment not found")
+    return dict(row)
+
+
+@app.post("/v1/deployments/{deployment_id}/{verdict}")
+def judge_deployment(deployment_id: str, verdict: str, body: DeploymentVerdict,
+                     db: Session = Depends(get_db)):
+    if verdict not in ("approve", "reject"):
+        raise HTTPException(status_code=404, detail="unknown action")
+    status = "approved" if verdict == "approve" else "rejected"
+    result = db.execute(
+        text(
+            "UPDATE deployment SET status = :st, approved_at = now(), approved_by = 'noah',"
+            " notes = COALESCE(notes || ' · ', '') || COALESCE(:notes, '')"
+            " WHERE id::text = :id AND status = 'requested' RETURNING id"
+        ),
+        {"st": status, "id": deployment_id, "notes": body.notes},
+    ).first()
+    if not result:
+        raise HTTPException(status_code=409, detail="deployment not in requested state")
+    db.commit()
+    publisher.publish(
+        EVENTS_CHANNEL,
+        json.dumps({"type": f"deploy.{status}", "deployment_id": deployment_id}),
+    )
+    return {"ok": True, "status": status}
 
 
 @app.get("/v1/projects")

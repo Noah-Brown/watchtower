@@ -139,6 +139,20 @@ class DecisionAnswer(BaseModel):
     answer: str
 
 
+class DeploymentCreate(BaseModel):
+    app_slug: str
+    env: str = "prod"
+    ref: str
+    summary: str | None = None
+    checks: list[str] = Field(default_factory=list)
+    session_id: str | None = None
+    project_slug: str | None = None
+
+
+class DeploymentVerdict(BaseModel):
+    notes: str | None = None
+
+
 class DecisionCreate(BaseModel):
     project_slug: str | None = None
     session_id: str | None = None

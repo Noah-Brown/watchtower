@@ -13,7 +13,7 @@ async function getJSON(path) {
 
 export function useTower() {
   const [data, setData] = useState({
-    sessions: [], decisions: [], projects: [], apps: [], spend: [],
+    sessions: [], decisions: [], deployments: [], projects: [], apps: [], spend: [],
     unassigned: 0, loaded: false, apiDown: false,
   });
   const [wsLive, setWsLive] = useState(false);
@@ -21,9 +21,10 @@ export function useTower() {
 
   const refetch = useCallback(async () => {
     try {
-      const [sessions, decisions, projects, apps, spend] = await Promise.all([
+      const [sessions, decisions, deployments, projects, apps, spend] = await Promise.all([
         getJSON("/v1/sessions?active=true"),
         getJSON("/v1/decisions?status=open"),
+        getJSON("/v1/deployments?status=requested"),
         getJSON("/v1/projects"),
         getJSON("/v1/apps"),
         getJSON("/v1/spend"),
@@ -31,6 +32,7 @@ export function useTower() {
       setData({
         sessions: sessions.sessions,
         decisions: decisions.decisions,
+        deployments: deployments.deployments,
         projects: projects.projects,
         unassigned: projects.unassigned_sessions,
         apps: apps.apps,
@@ -81,6 +83,21 @@ export async function answerDecision(id, answer) {
     body: JSON.stringify({ answer }),
   });
   if (!res.ok) throw new Error(`answer failed: ${res.status}`);
+}
+
+export async function judgeDeployment(id, verdict, notes) {
+  const res = await fetch(`${API}/v1/deployments/${id}/${verdict}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ notes: notes || null }),
+  });
+  if (!res.ok) throw new Error(`${verdict} failed: ${res.status}`);
+}
+
+export async function fetchSessionDetail(id) {
+  const res = await fetch(`${API}/v1/sessions/${id}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`detail: ${res.status}`);
+  return res.json();
 }
 
 export const HARNESS_BADGE = {

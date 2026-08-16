@@ -168,17 +168,24 @@ def ingest(db: Session, envelope: EventEnvelope) -> dict:
             },
         )
 
-    if envelope.type in ("decision.request", "needs_input", "deploy.request"):
+    if envelope.type == "deploy.request":
+        create_deployment(
+            db,
+            app_slug=payload["app_slug"],
+            env=payload.get("env", "prod"),
+            ref=payload["ref"],
+            summary=payload.get("summary"),
+            checks=payload.get("checks") or [],
+            session_id=session_id,
+            project_slug=project_slug,
+        )
+
+    if envelope.type in ("decision.request", "needs_input"):
         kind = {
             "decision.request": "decision",
             "needs_input": payload.get("kind", "question"),
-            "deploy.request": "deploy",
         }[envelope.type]
-        title = payload.get("title") or payload.get("prompt") or (
-            f"Deploy {payload.get('app_slug')} → {payload.get('env')}"
-            if envelope.type == "deploy.request"
-            else "(untitled)"
-        )
+        title = payload.get("title") or payload.get("prompt") or "(untitled)"
         db.execute(
             text(
                 "INSERT INTO decision"
@@ -212,6 +219,30 @@ def ingest(db: Session, envelope: EventEnvelope) -> dict:
         "payload": payload,
     }
     return {"accepted": True, "duplicate": False, "session_id": session_id, "event": stored}
+
+
+def create_deployment(db: Session, *, app_slug: str, env: str, ref: str, summary: str | None,
+                      checks: list, session_id: str | None, project_slug: str | None) -> str:
+    """Create a deployment awaiting approval. Unknown apps are auto-registered
+    (minimal row) so a request for a not-yet-registered app still reaches Noah
+    instead of bouncing."""
+    db.execute(
+        text(
+            "INSERT INTO app (slug, name, project_slug, env) VALUES (:slug, :slug, :proj, :env)"
+            " ON CONFLICT (slug) DO NOTHING"
+        ),
+        {"slug": app_slug, "proj": project_slug, "env": env},
+    )
+    deployment_id = str(uuid.uuid4())
+    notes = "; ".join(filter(None, [summary, "checks: " + ", ".join(checks) if checks else None]))
+    db.execute(
+        text(
+            "INSERT INTO deployment (id, app_slug, ref, requested_by_session, status, notes)"
+            " VALUES (:id, :app, :ref, :sid, 'requested', :notes)"
+        ),
+        {"id": deployment_id, "app": app_slug, "ref": ref, "sid": session_id, "notes": notes or None},
+    )
+    return deployment_id
 
 
 def sweep_stale(db: Session, timeout_s: int) -> int:

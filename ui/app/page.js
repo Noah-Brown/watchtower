@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  useTower, answerDecision, HARNESS_BADGE,
+  useTower, answerDecision, judgeDeployment, fetchSessionDetail, HARNESS_BADGE,
   elapsed, ago, money, tokens, activityText,
 } from "@/lib/tower";
 
@@ -14,7 +14,7 @@ const STATUS_UI = {
   errored: ["blk", "ERRORED"],
 };
 
-function Hud({ sessions, decisions, spend, wsLive, apiDown }) {
+function Hud({ sessions, needYou, spend, wsLive, apiDown }) {
   const [now, setNow] = useState(null);
   useEffect(() => {
     setNow(new Date());
@@ -25,7 +25,6 @@ function Hud({ sessions, decisions, spend, wsLive, apiDown }) {
   const running = sessions.filter((s) => s.status === "running").length;
   const blocked = sessions.filter((s) => s.status === "blocked").length;
   const stale = sessions.filter((s) => s.status === "stale").length;
-  const needYou = decisions.length;
   const today = spend.reduce((a, r) => a + Number(r.today || 0), 0);
   const week = spend.reduce((a, r) => a + Number(r.week || 0), 0);
   const tin = spend.reduce((a, r) => a + Number(r.tokens_in_today || 0), 0);
@@ -112,7 +111,81 @@ function Minimap({ projects, unassigned, sessions }) {
 
 const FILTERS = ["all", "needs you", "running", "stale"];
 
-function Units({ sessions }) {
+function Drawer({ sessionId, onClose }) {
+  const [detail, setDetail] = useState(null);
+  useEffect(() => {
+    let dead = false;
+    fetchSessionDetail(sessionId).then((d) => !dead && setDetail(d)).catch(() => {});
+    const onKey = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => { dead = true; window.removeEventListener("keydown", onKey); };
+  }, [sessionId, onClose]);
+
+  const s = detail?.session;
+  return (
+    <div className="drawer-veil" onClick={onClose}>
+      <div className="drawer" onClick={(e) => e.stopPropagation()}>
+        {!s ? <div className="empty">loading…</div> : (
+          <>
+            <div className="dr-head">
+              <span className={`badge ${(HARNESS_BADGE[s.harness] || [""])[0]}`}>{s.harness}</span>
+              <span className="proj">{s.project_slug || "unassigned"}</span>
+              <span className="mono dim">{s.status}</span>
+              <button className="dr-close" onClick={onClose}>esc</button>
+            </div>
+            <div className="dr-meta mono">
+              <div><span>session</span>{s.harness_session_id}</div>
+              <div><span>host</span>{s.host || "—"} · {s.cwd || "—"}{s.branch ? ` @ ${s.branch}` : ""}</div>
+              <div><span>model</span>{s.model || "unknown"} · started {ago(s.started_at)} ago</div>
+              <div><span>usage</span>{tokens(s.tokens_in)} in · {tokens(s.tokens_out)} out · {money(s.cost_usd)}</div>
+            </div>
+            {detail.artifacts.length > 0 && (
+              <>
+                <h2>Artifacts</h2>
+                <div className="dr-artifacts">
+                  {detail.artifacts.map((a, i) => (
+                    <a key={i} className="mono" href={a.payload.ref} target="_blank" rel="noreferrer">
+                      [{a.payload.kind}] {a.payload.title || a.payload.ref}
+                    </a>
+                  ))}
+                </div>
+              </>
+            )}
+            <h2>Timeline</h2>
+            <div className="dr-timeline mono">
+              {detail.timeline.map((e) => (
+                <div key={e.seq}>
+                  <span className="dim">{ago(e.ts)}</span>
+                  <span className="et">{e.type}</span>
+                  <span className="ep">{summarizeEvent(e)}</span>
+                </div>
+              ))}
+              {detail.timeline.length === 0 && <div className="dim">no events</div>}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function summarizeEvent(e) {
+  const p = e.payload || {};
+  switch (e.type) {
+    case "tool.call": return `${p.tool}${p.ok === false ? " ✗" : ""}${p.duration_ms ? ` · ${p.duration_ms}ms` : ""}`;
+    case "activity": return `${p.phase}${p.label ? " — " + p.label : ""}`;
+    case "usage": return `${tokens(p.input)} in · ${tokens(p.output)} out`;
+    case "session.start": return p.cwd || "";
+    case "session.end": return p.reason || "";
+    case "needs_input": return p.prompt || p.kind;
+    case "decision.request": return p.title;
+    case "deploy.request": return `${p.app_slug} → ${p.env} @ ${p.ref}`;
+    case "log": return p.message;
+    default: return "";
+  }
+}
+
+function Units({ sessions, onOpen }) {
   const [filter, setFilter] = useState("all");
   const shown = useMemo(() => {
     const rank = { blocked: 0, running: 1, stale: 2, errored: 3, ended: 4 };
@@ -144,7 +217,8 @@ function Units({ sessions }) {
           const tok = Number(s.tokens || 0);
           const pct = Math.min(100, Math.round((tok / 500000) * 100));
           return (
-            <div key={s.id} className={"card" + (s.status === "blocked" ? " blocked" : "") + (s.status === "stale" ? " stale" : "")}>
+            <div key={s.id} onClick={() => onOpen(s.id)}
+              className={"card" + (s.status === "blocked" ? " blocked" : "") + (s.status === "stale" ? " stale" : "")}>
               <div className="top">
                 <span className={`badge ${badgeCls}`}>{badgeLabel}</span>
                 <span className="proj">{s.project_slug || "unassigned"}</span>
@@ -201,12 +275,38 @@ function Alert({ d, onAnswered }) {
   );
 }
 
-function Alerts({ decisions, refetch }) {
+function DeployAlert({ d, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const judge = async (verdict) => {
+    if (busy) return;
+    setBusy(true);
+    try { await judgeDeployment(d.id, verdict); onDone(); }
+    catch { setBusy(false); }
+  };
+  return (
+    <div className="al deploy">
+      <div className="k">
+        <span>deploy · {d.project_slug || d.app_slug}</span>
+        <span>{ago(d.requested_at)} · → {d.env}</span>
+      </div>
+      <div className="t">Approve {d.ref} to {d.env}?</div>
+      <div className="c">{d.app_slug}{d.notes ? ` — ${d.notes}` : ""}</div>
+      <div className="opts">
+        <button className="rec" disabled={busy} onClick={() => judge("approve")}>Approve</button>
+        <button disabled={busy} onClick={() => judge("reject")}>Reject</button>
+      </div>
+    </div>
+  );
+}
+
+function Alerts({ decisions, deployments, refetch }) {
   return (
     <aside className="alerts">
       <h2>Alerts · needs you</h2>
       <div className="stack">
-        {decisions.length === 0 && <div className="empty">nothing needs you</div>}
+        {decisions.length === 0 && deployments.length === 0 &&
+          <div className="empty">nothing needs you</div>}
+        {deployments.map((d) => <DeployAlert key={d.id} d={d} onDone={refetch} />)}
         {decisions.map((d) => <Alert key={d.id} d={d} onAnswered={refetch} />)}
       </div>
       <div className="intake">
@@ -243,13 +343,16 @@ function Base({ apps }) {
 
 export default function Tower() {
   const t = useTower();
+  const [open, setOpen] = useState(null);
+  const needYou = t.decisions.length + t.deployments.length;
   return (
     <div className="shell">
-      <Hud sessions={t.sessions} decisions={t.decisions} spend={t.spend} wsLive={t.wsLive} apiDown={t.apiDown} />
+      <Hud sessions={t.sessions} needYou={needYou} spend={t.spend} wsLive={t.wsLive} apiDown={t.apiDown} />
       <Minimap projects={t.projects} unassigned={t.unassigned} sessions={t.sessions} />
-      <Units sessions={t.sessions} />
-      <Alerts decisions={t.decisions} refetch={t.refetch} />
+      <Units sessions={t.sessions} onOpen={setOpen} />
+      <Alerts decisions={t.decisions} deployments={t.deployments} refetch={t.refetch} />
       <Base apps={t.apps} />
+      {open && <Drawer sessionId={open} onClose={() => setOpen(null)} />}
     </div>
   );
 }
