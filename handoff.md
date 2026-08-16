@@ -230,10 +230,17 @@ Desktop-first, one screen, no scrolling for the main view. Panels:
 
 ## STATE
 
-_Updated: 2026-08-16 by Noah (initial)_
+_Updated: 2026-08-16 by Claude (M0 session)_
 
-**Phase:** M0 not started.
+**Phase:** M0 built and smoke-tested end to end.
+**What changed:**
+- Monorepo scaffolded: `api/` (FastAPI + Alembic), `adapters/common` + `adapters/claude-code`, `cli/tower`, `docker-compose.yml` (Postgres :5433, Redis :6380).
+- Full Postgres schema in migration `0001`; seed script (`api/seed.py`) with harness pricing, 4 projects, fake sessions, one open decision.
+- `POST /v1/events`: envelope + per-type payload validation (unknown keys dropped), dedup on (session_id, seq), session lifecycle, project inference from cwd, usage → cost ledger (unknown model → null cost), defensive PHI redaction. Redis fan-out → `WS /v1/stream`.
+- Stale sweeper: no heartbeat for 45s → `stale`.
+- `tower ask` blocks by default and returns Noah's answer on stdout — verified round trip. `tower deploy-request`, `tower state` also in.
+- Claude Code hook adapter (`adapters/claude-code/tower_hook.py` + settings snippet): SessionStart/End, PostToolUse (name+outcome only), Notification → needs_input, Stop/SubagentStop.
 **In flight:** nothing.
-**Blockers:** open decisions 1–5 above.
-**Next up:** scaffold monorepo; write schema + first migration; Claude Code hook adapter; seed script.
-**Decisions for Noah:** see list above.
+**Blockers:** none. Open decisions 1–5 answered with defaults in `docs/decisions.md` — Noah should review 2–4.
+**Next up (M1):** Next.js read-only HUD (HUD bar, Units, Alerts, Minimap) over `WS /v1/stream` + REST. Then M2 answer-in-UI (API side already done).
+**Decisions for Noah:** review `docs/decisions.md` defaults (auth, push channel, circuit breaker).

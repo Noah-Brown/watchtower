@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""`tower` CLI — the harness-agnostic escalation path.
+
+  tower ask --project cce --title "..." [--context ...] [--option A --option B]
+            [--recommend A] [--urgency low|normal|high] [--no-wait]
+  tower deploy-request --app cce-prod --env prod --ref v1.2.3 [--summary ...]
+  tower state [--active]
+
+`tower ask` blocks by default, polling until Noah answers in the UI, then prints
+the answer to stdout (this is what the agent reads). --no-wait prints the
+decision id and returns.
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+TOWER_URL = os.environ.get("TOWER_URL", "http://localhost:8600")
+POLL_INTERVAL_S = 3
+
+
+def _request(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        TOWER_URL + path, data=data,
+        headers={"Content-Type": "application/json"}, method=method,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        sys.exit(f"tower: {e.code} {e.read().decode()[:200]}")
+    except urllib.error.URLError as e:
+        sys.exit(f"tower: cannot reach Tower at {TOWER_URL} ({e.reason})")
+
+
+def cmd_ask(args):
+    body = {
+        "project_slug": args.project,
+        "session_id": os.environ.get("TOWER_SESSION_ID"),
+        "kind": "decision",
+        "title": args.title,
+        "context": args.context,
+        "options": args.option or [],
+        "recommendation": args.recommend,
+        "urgency": args.urgency,
+    }
+    decision_id = _request("POST", "/v1/decisions", body)["id"]
+    if args.no_wait:
+        print(decision_id)
+        return
+    print(f"decision {decision_id} filed; waiting for Noah…", file=sys.stderr)
+    while True:
+        decision = _request("GET", f"/v1/decisions/{decision_id}")
+        if decision["status"] == "answered":
+            print(decision["answer"])
+            return
+        if decision["status"] == "expired":
+            sys.exit("tower: decision expired without an answer")
+        time.sleep(POLL_INTERVAL_S)
+
+
+def cmd_deploy_request(args):
+    body = {
+        "project_slug": args.project,
+        "kind": "deploy",
+        "title": f"Deploy {args.app} → {args.env} @ {args.ref}",
+        "context": args.summary,
+        "urgency": "high",
+    }
+    decision_id = _request("POST", "/v1/decisions", body)["id"]
+    print(decision_id)
+
+
+def cmd_state(args):
+    data = _request("GET", "/v1/sessions" + ("?active=true" if args.active else ""))
+    for s in data["sessions"]:
+        cost = f"${float(s['cost_usd']):.2f}" if s["cost_usd"] is not None else "$?"
+        print(f"{s['status']:8} {s['harness']:12} {s['project_slug'] or 'unassigned':14}"
+              f" {s['model'] or '-':22} {cost:>8}  {s['harness_session_id']}")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="tower")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    ask = sub.add_parser("ask", help="escalate a decision to Noah (blocks for the answer)")
+    ask.add_argument("--project", required=True)
+    ask.add_argument("--title", required=True)
+    ask.add_argument("--context")
+    ask.add_argument("--option", action="append")
+    ask.add_argument("--recommend")
+    ask.add_argument("--urgency", choices=["low", "normal", "high"], default="normal")
+    ask.add_argument("--no-wait", action="store_true")
+    ask.set_defaults(func=cmd_ask)
+
+    deploy = sub.add_parser("deploy-request", help="request deploy sign-off")
+    deploy.add_argument("--app", required=True)
+    deploy.add_argument("--env", required=True)
+    deploy.add_argument("--ref", required=True)
+    deploy.add_argument("--project")
+    deploy.add_argument("--summary")
+    deploy.set_defaults(func=cmd_deploy_request)
+
+    state = sub.add_parser("state", help="list sessions")
+    state.add_argument("--active", action="store_true")
+    state.set_defaults(func=cmd_state)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

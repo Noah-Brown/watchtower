@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+api/uv.lock
+.env
+nohup.out

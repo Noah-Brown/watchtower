@@ -1,0 +1,11 @@
+{
+  "//": "Merge into ~/.claude/settings.json (or a project .claude/settings.json). Set TOWER_ADAPTER to the absolute path of tower_hook.py and TOWER_URL if the API is not on localhost:8600. Optionally set TOWER_PROJECT to pin the project slug; otherwise the API infers it from cwd.",
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "python3 $TOWER_ADAPTER" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "python3 $TOWER_ADAPTER" }] }],
+    "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "python3 $TOWER_ADAPTER" }] }],
+    "Notification": [{ "hooks": [{ "type": "command", "command": "python3 $TOWER_ADAPTER" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "python3 $TOWER_ADAPTER" }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "python3 $TOWER_ADAPTER" }] }]
+  }
+}
