@@ -44,6 +44,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Control Tower API", lifespan=lifespan)
 
+# Local-only v1 (docs/decisions.md #2): UI dev server origins only.
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3600", "http://127.0.0.1:3600"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/v1/health")
 def health(db: Session = Depends(get_db)):
@@ -76,7 +86,11 @@ def list_sessions(active: bool = False, db: Session = Depends(get_db)):
             "SELECT id, harness, harness_session_id, project_slug, host, model, started_at,"
             " ended_at, status, last_heartbeat, cwd, branch,"
             " (SELECT COALESCE(SUM(cost_usd),0) FROM usage_ledger u WHERE u.session_id = agent_session.id) AS cost_usd,"
-            " (SELECT COALESCE(SUM(input+output),0) FROM usage_ledger u WHERE u.session_id = agent_session.id) AS tokens"
+            " (SELECT COALESCE(SUM(input+output),0) FROM usage_ledger u WHERE u.session_id = agent_session.id) AS tokens,"
+            " (SELECT jsonb_build_object('type', e.type, 'ts', e.ts, 'payload', e.payload)"
+            "    FROM event e WHERE e.session_id = agent_session.id"
+            "    AND e.type IN ('activity','tool.call','needs_input','decision.request','deploy.request','log')"
+            "    ORDER BY e.seq DESC LIMIT 1) AS last_activity"
             f" FROM agent_session {where} ORDER BY started_at DESC LIMIT 200"
         )
     ).mappings()
@@ -159,6 +173,45 @@ def answer_decision(decision_id: str, body: DecisionAnswer, db: Session = Depend
     return {"ok": True}
 
 
+@app.get("/v1/projects")
+def list_projects(db: Session = Depends(get_db)):
+    rows = db.execute(
+        text(
+            "SELECT p.slug, p.name, p.objective, p.phase, p.color,"
+            " p.budget_usd_daily, p.budget_usd_monthly,"
+            " COUNT(s.id) FILTER (WHERE s.status IN ('running')) AS agents_running,"
+            " COUNT(s.id) FILTER (WHERE s.status = 'blocked') AS agents_blocked,"
+            " COUNT(s.id) FILTER (WHERE s.status = 'stale') AS agents_stale,"
+            " (SELECT COUNT(*) FROM decision d WHERE d.project_slug = p.slug AND d.status = 'open') AS open_decisions,"
+            " (SELECT COALESCE(SUM(cost_usd), 0) FROM usage_ledger u"
+            "   WHERE u.project_slug = p.slug AND u.ts >= date_trunc('day', now())) AS spend_today"
+            " FROM project p LEFT JOIN agent_session s ON s.project_slug = p.slug"
+            " GROUP BY p.slug ORDER BY p.slug"
+        )
+    ).mappings()
+    unassigned = db.execute(
+        text(
+            "SELECT COUNT(*) AS n FROM agent_session"
+            " WHERE project_slug IS NULL AND status IN ('running','blocked','stale')"
+        )
+    ).scalar()
+    return {"projects": [dict(r) for r in rows], "unassigned_sessions": unassigned}
+
+
+@app.get("/v1/apps")
+def list_apps(db: Session = Depends(get_db)):
+    rows = db.execute(
+        text(
+            "SELECT a.slug, a.name, a.project_slug, a.env, a.url,"
+            " (SELECT jsonb_build_object('ok', h.ok, 'latency_ms', h.latency_ms, 'ts', h.ts)"
+            "    FROM app_health_sample h WHERE h.app_slug = a.slug"
+            "    ORDER BY h.ts DESC LIMIT 1) AS last_sample"
+            " FROM app a ORDER BY a.slug"
+        )
+    ).mappings()
+    return {"apps": [dict(r) for r in rows]}
+
+
 @app.get("/v1/spend")
 def spend(db: Session = Depends(get_db)):
     rows = db.execute(
@@ -167,7 +220,9 @@ def spend(db: Session = Depends(get_db)):
             " SUM(cost_usd) FILTER (WHERE ts >= date_trunc('day', now())) AS today,"
             " SUM(cost_usd) FILTER (WHERE ts >= date_trunc('week', now())) AS week,"
             " SUM(cost_usd) FILTER (WHERE ts >= date_trunc('month', now())) AS month,"
-            " COUNT(*) FILTER (WHERE cost_usd IS NULL) AS unpriced_rows"
+            " COUNT(*) FILTER (WHERE cost_usd IS NULL) AS unpriced_rows,"
+            " SUM(input) FILTER (WHERE ts >= date_trunc('day', now())) AS tokens_in_today,"
+            " SUM(output) FILTER (WHERE ts >= date_trunc('day', now())) AS tokens_out_today"
             " FROM usage_ledger GROUP BY project_slug, harness"
         )
     ).mappings()

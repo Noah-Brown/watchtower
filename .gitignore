@@ -4,3 +4,6 @@ __pycache__/
 api/uv.lock
 .env
 nohup.out
+ui/node_modules/
+ui/.next/
+ui/package-lock.json

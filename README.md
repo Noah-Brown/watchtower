@@ -21,6 +21,12 @@ uv run uvicorn app.main:app --port 8600
 
 Then: `curl localhost:8600/v1/health`, `cli/tower state --active`, live events on `ws://localhost:8600/v1/stream`. Wire up a real Claude Code session with `adapters/claude-code/settings.snippet.json`.
 
+HUD (Next.js):
+
+```bash
+cd ui && npm install && npm run build && npm run start   # http://localhost:3600
+```
+
 ## Status
 
 M0 (spine) not started. See the `STATE` section at the bottom of `handoff.md` for live status.

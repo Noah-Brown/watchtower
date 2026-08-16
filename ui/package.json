@@ -1,0 +1,14 @@
+{
+  "name": "tower-ui",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3600",
+    "build": "next build",
+    "start": "next start -p 3600"
+  },
+  "dependencies": {
+    "next": "^15.4.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
+}

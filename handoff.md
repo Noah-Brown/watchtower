@@ -230,9 +230,10 @@ Desktop-first, one screen, no scrolling for the main view. Panels:
 
 ## STATE
 
-_Updated: 2026-08-16 by Claude (M0 session)_
+_Updated: 2026-08-16 by Claude (M0 + M1 sessions)_
 
-**Phase:** M0 built and smoke-tested end to end.
+**Phase:** M1 done — live HUD rendering over WS, verified with headless-browser screenshots (new session appears without reload). M2 is ~half done ahead of schedule: alert cards in the UI already answer decisions via `POST /v1/decisions/{id}/answer` (option buttons + free text), which round-trips to a blocking `tower ask`.
+**M1 details:** `ui/` Next.js 15 (port 3600, plain JS, no component lib; wireframe palette/type kept 1:1). Panels: HUD bar (agent counts, need-you, tokens/spend today, unpriced-usage alert, WS status), Minimap (tile color from blocked/decisions/activity, unassigned-sessions fog), Units (sorted needs-you-first, filters, activity from latest event, token meter, elapsed/cost), Alerts (answerable), Base strip (apps; probes land M4). Data: REST fetch + WS-triggered refetch (400ms coalesce) + 30s poll fallback + WS auto-reconnect. New API endpoints: `/v1/projects` (rollups), `/v1/apps`; sessions now include `last_activity`; spend includes today's token sums; CORS for localhost:3600.
 **What changed:**
 - Monorepo scaffolded: `api/` (FastAPI + Alembic), `adapters/common` + `adapters/claude-code`, `cli/tower`, `docker-compose.yml` (Postgres :5433, Redis :6380).
 - Full Postgres schema in migration `0001`; seed script (`api/seed.py`) with harness pricing, 4 projects, fake sessions, one open decision.
@@ -242,5 +243,5 @@ _Updated: 2026-08-16 by Claude (M0 session)_
 - Claude Code hook adapter (`adapters/claude-code/tower_hook.py` + settings snippet): SessionStart/End, PostToolUse (name+outcome only), Notification → needs_input, Stop/SubagentStop.
 **In flight:** nothing.
 **Blockers:** none. Open decisions 1–5 answered with defaults in `docs/decisions.md` — Noah should review 2–4.
-**Next up (M1):** Next.js read-only HUD (HUD bar, Units, Alerts, Minimap) over `WS /v1/stream` + REST. Then M2 answer-in-UI (API side already done).
+**Next up (M2 remainder):** deploy requests as first-class approvals (`deployment` table flow, not just a decision row); deep-link from unit card to session detail drawer. Then M3 spend (pricing table UI, budgets, breaker).
 **Decisions for Noah:** review `docs/decisions.md` defaults (auth, push channel, circuit breaker).
